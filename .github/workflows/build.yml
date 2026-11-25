@@ -22,7 +22,15 @@ jobs:
         with:
           gradle-version: '8.9'
       - name: Build
-        run: gradle --no-daemon assembleRelease
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$SIGNING_KEYSTORE_BASE64" ]; then
+            echo "::error::Secret SIGNING_KEYSTORE_BASE64 is missing. Without it, updates cannot install over the old app. See README."
+            exit 1
+          fi
+          gradle --no-daemon assembleRelease
       - name: Rename APK
         run: cp app/build/outputs/apk/release/app-release.apk PortWatch.apk
       - uses: actions/upload-artifact@v4

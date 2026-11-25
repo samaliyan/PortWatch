@@ -15,3 +15,15 @@ and publishes it under Releases as `v<versionName>` (from `app/build.gradle.kts`
 Bump `versionName` and `versionCode` for each new version.
 
 Local build: Android Studio → Open this folder → Run.
+
+## Signing key (required)
+
+Every release must be signed with the same key, or Android refuses to install an update
+over the old app. The key is kept in GitHub Secrets, not in the repo:
+
+Settings → Secrets and variables → Actions → New repository secret
+
+- `SIGNING_KEYSTORE_BASE64`: the keystore file, Base64-encoded
+- `SIGNING_PASSWORD`: the keystore password
+
+Keep a backup of the keystore. If it is lost, users must uninstall and reinstall once.

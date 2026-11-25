@@ -54,6 +54,11 @@ class MainActivity : ComponentActivity() {
         }
         setContent { AppTheme { App() } }
     }
+
+    override fun onResume() {
+        super.onResume()
+        Live.net.value = Net.state(this)
+    }
 }
 
 @Composable
@@ -79,6 +84,12 @@ private fun App() {
         ) permission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
+    // Ask about a new version once each time the app opens.
+    var update by remember { mutableStateOf<UpdateInfo?>(null) }
+    LaunchedEffect(Unit) {
+        update = try { Updater.findUpdate() } catch (_: Exception) { null }
+    }
+
     BackHandler(enabled = screen != Screen.Main) { screen = Screen.Main }
 
     when (screen) {
@@ -88,8 +99,10 @@ private fun App() {
             onOpen = { screen = it },
         )
         Screen.History -> HistoryScreen(onBack = { screen = Screen.Main })
-        Screen.Settings -> SettingsScreen(onBack = { screen = Screen.Main })
+        Screen.Settings -> SettingsScreen(onBack = { screen = Screen.Main }, onUpdateFound = { update = it })
     }
+
+    update?.let { info -> UpdateDialog(info, onDismiss = { update = null }) }
 }
 
 // ───────────────────────── Main ─────────────────────────
@@ -215,7 +228,8 @@ private fun StatusCard(
 ) {
     val ctx = LocalContext.current
     val keys = servers.flatMap { s -> s.targets().map { CheckResult.key(s.id, it) } }
-    val known = keys.mapNotNull { results[it] }
+    val known = keys.mapNotNull { results[it] }.filter { !it.skipped }
+    val net by Live.net.collectAsState()
     val up = known.count { it.ok }
     val down = known.count { !it.ok }
 
@@ -238,14 +252,17 @@ private fun StatusCard(
                 Stat("Down", down.toString(), if (down > 0) Red else MaterialTheme.colorScheme.onSurface)
                 Stat("Last check", if (lastRun == 0L) "—" else timeOnly(lastRun), MaterialTheme.colorScheme.onSurface)
             }
-            val vpn = remember(lastRun, monitoring) { Checker.vpnActive(ctx) }
-            if (vpn) {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    "VPN is on. Port checks go through the VPN, so results show what the VPN can reach.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFB45309),
+            when (net) {
+                NetState.Direct -> Notice(
+                    "VPN is on. Port checks bypass it and connect directly. Ping is skipped.",
+                    Color(0xFFB45309)
                 )
+                NetState.Blocked -> Notice(
+                    "VPN is on and blocks direct checks, so checks are paused. " +
+                        "Turn off the VPN, or exclude PortWatch in the VPN app (Per-app proxy).",
+                    Red
+                )
+                NetState.Normal -> {}
             }
             Spacer(Modifier.height(14.dp))
             Button(
@@ -264,6 +281,14 @@ private fun StatusCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun Notice(text: String, color: Color) {
+    Spacer(Modifier.height(12.dp))
+    Surface(color = color.copy(alpha = 0.10f), shape = MaterialTheme.shapes.small) {
+        Text(text, style = MaterialTheme.typography.bodySmall, color = color, modifier = Modifier.padding(10.dp))
     }
 }
 
@@ -291,10 +316,11 @@ private fun ServerCard(
     onDelete: () -> Unit,
 ) {
     val rs = server.targets().map { it to results[CheckResult.key(server.id, it)] }
+    val real = rs.mapNotNull { it.second }.filter { !it.skipped }
     val overall = when {
-        rs.any { it.second == null } && rs.none { it.second?.ok == false } -> Gray
-        rs.all { it.second?.ok == true } -> Green
-        else -> Red
+        real.any { !it.ok } -> Red
+        real.isNotEmpty() && real.size == rs.count { it.second?.skipped != true } -> Green
+        else -> Gray
     }
 
     Card(onClick = { if (!checking) onCheck() }, modifier = Modifier.fillMaxWidth()) {
@@ -315,7 +341,13 @@ private fun ServerCard(
                     Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Dot(when (r?.ok) { true -> Green; false -> Red; null -> Gray }, 8)
+                    Dot(
+                        when {
+                            r == null || r.skipped -> Gray
+                            r.ok -> Green
+                            else -> Red
+                        }, 8
+                    )
                     Spacer(Modifier.width(10.dp))
                     Text(t.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                     Text(
@@ -325,7 +357,7 @@ private fun ServerCard(
                             else -> r.detail
                         },
                         style = MaterialTheme.typography.bodyMedium,
-                        color = if (r?.ok == false) Red else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (r != null && !r.ok && !r.skipped) Red else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -479,8 +511,11 @@ private fun HistoryScreen(onBack: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsScreen(onBack: () -> Unit) {
+private fun SettingsScreen(onBack: () -> Unit, onUpdateFound: (UpdateInfo) -> Unit) {
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var updateStatus by remember { mutableStateOf<String?>(null) }
+    var checkingUpdate by remember { mutableStateOf(false) }
     var interval by remember { mutableStateOf(Store.intervalSec(ctx).toString()) }
     var timeout by remember { mutableStateOf(Store.timeoutMs(ctx).toString()) }
     var recovery by remember { mutableStateOf(Store.notifyRecovery(ctx)) }
@@ -554,9 +589,112 @@ private fun SettingsScreen(onBack: () -> Unit) {
                     Text("Disable battery optimization")
                 }
             }
+
+            HorizontalDivider()
+
+            Text("App", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Version ${Updater.currentVersion}" + (updateStatus?.let { " · $it" } ?: ""),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedButton(
+                onClick = {
+                    checkingUpdate = true
+                    updateStatus = null
+                    scope.launch {
+                        try {
+                            val u = Updater.findUpdate()
+                            if (u != null) onUpdateFound(u) else updateStatus = "Up to date"
+                        } catch (_: Exception) {
+                            updateStatus = "Could not reach GitHub"
+                        } finally {
+                            checkingUpdate = false
+                        }
+                    }
+                },
+                enabled = !checkingUpdate,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (checkingUpdate) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Text("Checking…")
+                } else Text("Check for updates")
+            }
         }
     }
 
+}
+
+// ───────────────────────── Update ─────────────────────────
+
+@Composable
+private fun UpdateDialog(info: UpdateInfo, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var progress by remember { mutableStateOf<Float?>(null) } // null = not started
+    var apk by remember { mutableStateOf<java.io.File?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val downloading = progress != null && apk == null && error == null
+
+    // After the user allows installs from PortWatch, come back and install right away.
+    val allowLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        val f = apk
+        if (f != null && Updater.canInstall(ctx)) Updater.install(ctx, f)
+    }
+
+    fun install(f: java.io.File) {
+        if (Updater.canInstall(ctx)) Updater.install(ctx, f)
+        else allowLauncher.launch(Updater.allowInstallIntent(ctx))
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!downloading) onDismiss() },
+        title = { Text("Update available") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Version ${info.version} is ready. You have ${Updater.currentVersion}.")
+                if (info.notes.isNotBlank() && progress == null) {
+                    Text(info.notes, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 8, overflow = TextOverflow.Ellipsis)
+                }
+                val p = progress
+                if (p != null && apk == null && error == null) {
+                    if (p < 0f) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    else LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
+                    Text(if (p < 0f) "Downloading…" else "Downloading… ${(p * 100).toInt()}%", style = MaterialTheme.typography.bodySmall)
+                }
+                if (apk != null) Text("Download complete.", style = MaterialTheme.typography.bodySmall, color = Green)
+                error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Red) }
+            }
+        },
+        confirmButton = {
+            val f = apk
+            TextButton(
+                enabled = !downloading,
+                onClick = {
+                    if (f != null) install(f)
+                    else {
+                        error = null
+                        progress = -1f
+                        scope.launch {
+                            try {
+                                val file = Updater.download(ctx, info) { progress = it }
+                                apk = file
+                                install(file)
+                            } catch (e: Exception) {
+                                error = "Download failed. Check the connection and try again."
+                                progress = null
+                            }
+                        }
+                    }
+                }
+            ) { Text(if (f != null) "Install" else if (error != null) "Retry" else "Update") }
+        },
+        dismissButton = {
+            TextButton(enabled = !downloading, onClick = onDismiss) { Text("Later") }
+        }
+    )
 }
 
 // ───────────────────────── Helpers ─────────────────────────

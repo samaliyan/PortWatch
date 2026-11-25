@@ -12,22 +12,47 @@ android {
         applicationId = "com.samaliyan.portwatch"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 3
+        versionName = "1.1.0"
+    }
+
+    // Every release must be signed with the same key, or updates will not install over
+    // the old version. The key comes from GitHub Secrets (see README), never from the repo.
+    val keystoreB64 = System.getenv("SIGNING_KEYSTORE_BASE64")
+    val keystoreFile = layout.buildDirectory.file("signing/release.keystore").get().asFile
+    val hasReleaseKey = !keystoreB64.isNullOrBlank()
+    if (hasReleaseKey) {
+        keystoreFile.parentFile.mkdirs()
+        keystoreFile.writeBytes(java.util.Base64.getMimeDecoder().decode(keystoreB64))
+    }
+
+    signingConfigs {
+        if (hasReleaseKey) {
+            create("release") {
+                storeFile = keystoreFile
+                storePassword = System.getenv("SIGNING_PASSWORD")
+                keyAlias = System.getenv("SIGNING_ALIAS") ?: "portwatch"
+                keyPassword = System.getenv("SIGNING_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 }
 
 dependencies {

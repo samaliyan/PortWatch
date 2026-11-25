@@ -61,8 +61,17 @@ object Notifier {
     fun up(ctx: Context, r: CheckResult) =
         post(ctx, r, "${r.serverName} is back", "${r.target.label}: ${r.detail}", NotificationCompat.PRIORITY_DEFAULT)
 
+    fun paused(ctx: Context) = post(
+        ctx, "paused".hashCode(), "Checks paused",
+        "A VPN is on and blocks direct checks. Turn it off or exclude PortWatch.",
+        NotificationCompat.PRIORITY_HIGH
+    )
+
+    private fun post(ctx: Context, r: CheckResult, title: String, text: String, priority: Int) =
+        post(ctx, r.key.hashCode(), title, text, priority)
+
     @SuppressLint("MissingPermission")
-    private fun post(ctx: Context, r: CheckResult, title: String, text: String, priority: Int) {
+    private fun post(ctx: Context, id: Int, title: String, text: String, priority: Int) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return
@@ -76,7 +85,7 @@ object Notifier {
             .setContentIntent(openApp(ctx))
             .build()
         try {
-            NotificationManagerCompat.from(ctx).notify(r.key.hashCode(), n)
+            NotificationManagerCompat.from(ctx).notify(id, n)
         } catch (_: SecurityException) {
         }
     }

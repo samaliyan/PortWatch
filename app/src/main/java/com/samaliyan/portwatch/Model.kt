@@ -32,6 +32,8 @@ data class CheckResult(
     val ms: Long?,
     val detail: String,
     val time: Long = System.currentTimeMillis(),
+    /** Not checked this round (e.g. ping while a VPN is on). Never counts as up or down. */
+    val skipped: Boolean = false,
 ) {
     val key get() = key(serverId, target)
 
@@ -41,7 +43,18 @@ data class CheckResult(
 }
 
 /** Live state shared between the UI and the background service. */
+/** How checks can reach the network right now. */
+enum class NetState {
+    /** No VPN: normal checks. */
+    Normal,
+    /** VPN is on, but checks go directly over Wi-Fi/mobile data, around the VPN. */
+    Direct,
+    /** VPN is on and does not let PortWatch go around it: checks are paused. */
+    Blocked,
+}
+
 object Live {
+    val net = MutableStateFlow(NetState.Normal)
     val results = MutableStateFlow<Map<String, CheckResult>>(emptyMap())
     val checking = MutableStateFlow(false)
     val monitoring = MutableStateFlow(false)
@@ -95,6 +108,9 @@ object Store {
 
     fun notifyRecovery(ctx: Context) = prefs(ctx).getBoolean("notifyRecovery", true)
     fun setNotifyRecovery(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("notifyRecovery", v).apply()
+
+    fun pausedNotified(ctx: Context) = prefs(ctx).getBoolean("pausedNotified", false)
+    fun setPausedNotified(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("pausedNotified", v).apply()
 
     fun monitoring(ctx: Context) = prefs(ctx).getBoolean("monitoring", false)
     fun setMonitoring(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("monitoring", v).apply()
