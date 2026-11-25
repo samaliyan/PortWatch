@@ -1,3 +1,5 @@
+import java.util.Base64
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -23,7 +25,7 @@ android {
     val hasReleaseKey = !keystoreB64.isNullOrBlank()
     if (hasReleaseKey) {
         keystoreFile.parentFile.mkdirs()
-        keystoreFile.writeBytes(java.util.Base64.getMimeDecoder().decode(keystoreB64))
+        keystoreFile.writeBytes(Base64.getMimeDecoder().decode(keystoreB64))
     }
 
     signingConfigs {
