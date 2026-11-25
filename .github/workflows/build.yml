@@ -29,8 +29,15 @@ jobs:
         with:
           name: PortWatch
           path: PortWatch.apk
+      - name: Read version
+        id: ver
+        run: echo "name=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.ver.outputs.name }}
+          name: PortWatch ${{ steps.ver.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
           files: PortWatch.apk

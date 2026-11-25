@@ -11,6 +11,7 @@ Simple Android app to watch your servers.
 ## Build
 
 Push to GitHub. The workflow in `.github/workflows/build.yml` builds `PortWatch.apk`
-(Actions → latest run → Artifacts). Push a tag like `v1.0.0` to also publish a Release.
+and publishes it under Releases as `v<versionName>` (from `app/build.gradle.kts`).
+Bump `versionName` and `versionCode` for each new version.
 
 Local build: Android Studio → Open this folder → Run.
