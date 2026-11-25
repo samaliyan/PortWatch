@@ -238,6 +238,15 @@ private fun StatusCard(
                 Stat("Down", down.toString(), if (down > 0) Red else MaterialTheme.colorScheme.onSurface)
                 Stat("Last check", if (lastRun == 0L) "—" else timeOnly(lastRun), MaterialTheme.colorScheme.onSurface)
             }
+            val vpn = remember(lastRun, monitoring) { Checker.vpnActive(ctx) }
+            if (vpn) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "VPN is on. Port checks go through the VPN, so results show what the VPN can reach.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFB45309),
+                )
+            }
             Spacer(Modifier.height(14.dp))
             Button(
                 onClick = onCheckAll,

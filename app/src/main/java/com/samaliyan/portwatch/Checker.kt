@@ -7,7 +7,10 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import java.net.ConnectException
+import java.net.SocketException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NoRouteToHostException
@@ -24,16 +27,42 @@ object Checker {
         return if (port == null) ping(server, target, timeoutMs) else tcp(server, target, port, timeoutMs)
     }
 
-    /** Same idea as "telnet host port": open a TCP connection and close it. */
+    /**
+     * Same idea as "telnet host port".
+     *
+     * A successful connect() alone is not proof: a VPN app or proxy on the phone accepts
+     * every connection locally and only then tries the real server. So after connecting we
+     * wait for the first answer:
+     *  - data arrives (e.g. SSH banner)          -> open
+     *  - nothing arrives within the timeout      -> open (server is waiting for us to speak)
+     *  - connection is closed or reset right away -> closed (the VPN/proxy could not reach it)
+     */
     private fun tcp(server: Server, target: Probe, port: Int, timeoutMs: Int): CheckResult {
         val start = System.nanoTime()
         return try {
-            Socket().use { it.connect(InetSocketAddress(server.host, port), timeoutMs) }
-            val ms = (System.nanoTime() - start) / 1_000_000
-            CheckResult(server.id, server.name, target, true, ms, "Open")
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(server.host, port), timeoutMs)
+                val connectMs = (System.nanoTime() - start) / 1_000_000
+                socket.soTimeout = timeoutMs
+                try {
+                    if (socket.getInputStream().read() == -1) {
+                        return CheckResult(server.id, server.name, target, false, null, "Closed")
+                    }
+                } catch (_: SocketTimeoutException) {
+                    // Connected and silent: a normal open port.
+                }
+                CheckResult(server.id, server.name, target, true, connectMs, "Open")
+            }
         } catch (e: Exception) {
             CheckResult(server.id, server.name, target, false, null, describe(e))
         }
+    }
+
+    /** True when a VPN is active; TCP results then pass through the VPN. */
+    fun vpnActive(ctx: Context): Boolean {
+        val cm = ctx.getSystemService(ConnectivityManager::class.java) ?: return false
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
     }
 
     private val timeRegex = Regex("time[=<]([0-9.]+)")
@@ -74,6 +103,7 @@ object Checker {
         is SocketTimeoutException -> "Timeout"
         is ConnectException -> if (e.message?.contains("refused", true) == true) "Refused" else "Connect failed"
         is NoRouteToHostException -> "No route"
+        is SocketException -> if (e.message?.contains("reset", true) == true) "Closed" else "Connection error"
         is UnknownHostException -> "Unknown host"
         else -> e.javaClass.simpleName
     }
